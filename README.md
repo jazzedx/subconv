@@ -43,10 +43,10 @@ make all            # 全平台
 ### 一键安装（Linux）
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/subconv/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/jazzedx/subconv/main/install.sh)
 
 # 国内加速
-bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/YOUR_USER/subconv/main/install.sh) https://ghfast.top/
+bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/jazzedx/subconv/main/install.sh) https://ghfast.top/
 ```
 
 安装后通过 systemd 管理：

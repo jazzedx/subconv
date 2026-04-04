@@ -6,7 +6,7 @@
 set -e
 
 # ============ 配置 ============
-REPO="YOUR_USER/subconv"
+REPO="jazzedx/subconv"
 INSTALL_DIR="/opt/subconv"
 BINARY_NAME="subconv"
 SERVICE_NAME="subconv"
