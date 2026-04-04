@@ -80,7 +80,22 @@ func main() {
 
 	// 启动HTTP服务（非阻塞）
 	go func() {
-		if err := srv.Start(cfg.Listen); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			// 预检证书文件是否可读
+			if _, e := os.Stat(cfg.TLSCert); e != nil {
+				slog.Error("TLS证书文件不可访问", "path", cfg.TLSCert, "err", e)
+				os.Exit(1)
+			}
+			if _, e := os.Stat(cfg.TLSKey); e != nil {
+				slog.Error("TLS私钥文件不可访问", "path", cfg.TLSKey, "err", e)
+				os.Exit(1)
+			}
+			err = srv.StartTLS(cfg.Listen, cfg.TLSCert, cfg.TLSKey)
+		} else {
+			err = srv.Start(cfg.Listen)
+		}
+		if err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP服务异常退出", "err", err)
 			os.Exit(1)
 		}

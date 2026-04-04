@@ -165,6 +165,12 @@ func (s *Server) Start(addr string) error {
 	return s.server.ListenAndServe()
 }
 
+func (s *Server) StartTLS(addr, certFile, keyFile string) error {
+	s.server = &http.Server{Addr: addr, Handler: s.mux}
+	slog.Info("HTTPS服务启动", "地址", addr, "证书", certFile)
+	return s.server.ListenAndServeTLS(certFile, keyFile)
+}
+
 func (s *Server) Shutdown(timeout time.Duration) {
 	if s.server == nil {
 		return

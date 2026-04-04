@@ -166,6 +166,16 @@ do_install() {
         do_start
     fi
 
+    # 新安装时询问是否配置 TLS
+    if [ "$IS_UPGRADE" -eq 0 ]; then
+        printf "\n"
+        printf "${YELLOW}是否配置 TLS 证书以启用 HTTPS？[y/N]: ${NC}"
+        read -r answer < /dev/tty
+        case "$answer" in
+            [yY]|[yY][eE][sS]) do_tls ;;
+        esac
+    fi
+
     printf "\n"
     printf "${GREEN}========================================${NC}\n"
     if [ "$IS_UPGRADE" -eq 1 ]; then
@@ -177,7 +187,7 @@ do_install() {
     printf "  版本:     %s\n" "$LATEST_VERSION"
     printf "  目录:     %s\n" "$INSTALL_DIR"
     printf "  配置:     %s\n" "$CONFIG_FILE"
-    printf "  管理:     subconv {start|stop|restart|status|log|config|uninstall}\n"
+    printf "  管理:     subconv {start|stop|restart|status|log|config|tls|uninstall}\n"
     printf "\n"
 }
 
@@ -290,6 +300,109 @@ do_log() {
     fi
 }
 
+# ============ 配置 TLS ============
+do_tls() {
+    if ! is_installed; then
+        error "SubConv 未安装"
+    fi
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        warn "配置文件不存在，先启动一次服务以生成默认配置"
+        return
+    fi
+
+    printf "\n"
+    printf "${BLUE}配置 TLS 证书${NC}\n"
+    printf "  证书通常由 certbot (Let's Encrypt) 或 acme.sh 生成\n"
+    printf "  certbot 默认路径: /etc/letsencrypt/live/域名/fullchain.pem\n"
+    printf "  acme.sh 默认路径: ~/.acme.sh/域名_ecc/fullchain.cer\n"
+    printf "\n"
+
+    printf "请输入证书文件路径 (fullchain.pem): "
+    read -r cert_path < /dev/tty
+    cert_path=$(echo "$cert_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ -z "$cert_path" ]; then
+        warn "已取消 TLS 配置"
+        return
+    fi
+    if [ ! -f "$cert_path" ]; then
+        warn "证书文件不存在: $cert_path"
+        printf "是否继续写入配置（稍后再放置证书）？[y/N]: "
+        read -r answer < /dev/tty
+        case "$answer" in
+            [yY]|[yY][eE][sS]) ;;
+            *) return ;;
+        esac
+    fi
+
+    printf "请输入私钥文件路径 (privkey.pem): "
+    read -r key_path < /dev/tty
+    key_path=$(echo "$key_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ -z "$key_path" ]; then
+        warn "已取消 TLS 配置"
+        return
+    fi
+    if [ ! -f "$key_path" ]; then
+        warn "私钥文件不存在: $key_path"
+        printf "是否继续写入配置（稍后再放置私钥）？[y/N]: "
+        read -r answer < /dev/tty
+        case "$answer" in
+            [yY]|[yY][eE][sS]) ;;
+            *) return ;;
+        esac
+    fi
+
+    # 读取当前监听端口
+    current_port=$(grep '^listen:' "$CONFIG_FILE" | sed 's/.*":\([0-9]*\)".*/\1/')
+    if [ -z "$current_port" ]; then
+        current_port="8866"
+    fi
+    printf "监听端口 [${current_port}]: "
+    read -r new_port < /dev/tty
+    new_port=$(echo "$new_port" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    # 更新配置文件
+    # 使用 sed 替换或追加 tls-cert / tls-key
+    if grep -q '^tls-cert:' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^tls-cert:.*|tls-cert: \"$cert_path\"|" "$CONFIG_FILE"
+    elif grep -q '^# tls-cert:' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^# tls-cert:.*|tls-cert: \"$cert_path\"|" "$CONFIG_FILE"
+    else
+        sed -i "/^listen:/a tls-cert: \"$cert_path\"" "$CONFIG_FILE"
+    fi
+
+    if grep -q '^tls-key:' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^tls-key:.*|tls-key: \"$key_path\"|" "$CONFIG_FILE"
+    elif grep -q '^# tls-key:' "$CONFIG_FILE" 2>/dev/null; then
+        sed -i "s|^# tls-key:.*|tls-key: \"$key_path\"|" "$CONFIG_FILE"
+    else
+        sed -i "/^tls-cert:/a tls-key: \"$key_path\"" "$CONFIG_FILE"
+    fi
+
+    # 仅在用户输入了新端口时才修改
+    if [ -n "$new_port" ] && [ "$new_port" != "$current_port" ]; then
+        sed -i "s|^listen:.*|listen: \":$new_port\"|" "$CONFIG_FILE"
+    fi
+
+    ok "TLS 配置已写入"
+    printf "  证书文件: %s\n" "$cert_path"
+    printf "  私钥文件: %s\n" "$key_path"
+    if [ -n "$new_port" ] && [ "$new_port" != "$current_port" ]; then
+        printf "  监听端口: %s (已修改)\n" "$new_port"
+    else
+        printf "  监听端口: %s (未修改)\n" "$current_port"
+    fi
+
+    if is_running; then
+        printf "${YELLOW}是否重启服务使 TLS 生效？[Y/n]: ${NC}"
+        read -r answer < /dev/tty
+        case "$answer" in
+            [nN]|[nN][oO]) info "跳过重启，修改将在下次启动时生效" ;;
+            *) do_restart ;;
+        esac
+    fi
+}
+
 # ============ 编辑配置 ============
 do_config() {
     if ! is_installed; then
@@ -394,7 +507,7 @@ install_management_script() {
 exec /opt/subconv/install.sh "$@"
 SCRIPT
     chmod +x /usr/local/bin/subconv
-    ok "管理命令已安装: subconv {start|stop|restart|status|log|config|uninstall}"
+    ok "管理命令已安装: subconv {start|stop|restart|status|log|config|tls|uninstall}"
 }
 
 # ============ 菜单 ============
@@ -411,10 +524,11 @@ show_menu() {
     printf "  ${GREEN}5.${NC} 查看状态\n"
     printf "  ${GREEN}6.${NC} 查看日志\n"
     printf "  ${GREEN}7.${NC} 编辑配置\n"
-    printf "  ${GREEN}8.${NC} 卸载\n"
+    printf "  ${GREEN}8.${NC} 配置 TLS\n"
+    printf "  ${GREEN}9.${NC} 卸载\n"
     printf "  ${GREEN}0.${NC} 退出\n"
     printf "\n"
-    printf "请选择操作 [0-8]: "
+    printf "请选择操作 [0-9]: "
     read -r choice < /dev/tty
     case "$choice" in
         1) do_install ;;
@@ -424,7 +538,8 @@ show_menu() {
         5) do_status ;;
         6) do_log ;;
         7) do_config ;;
-        8) do_uninstall ;;
+        8) do_tls ;;
+        9) do_uninstall ;;
         0) exit 0 ;;
         *) warn "无效选项" ;;
     esac
@@ -450,6 +565,7 @@ main() {
         status)           do_status ;;
         log|logs)         do_log ;;
         config)           do_config ;;
+        tls)              do_tls ;;
         uninstall|remove) do_uninstall ;;
         "")
             # 无参数：首次安装直接安装，否则显示菜单
@@ -461,7 +577,7 @@ main() {
             fi
             ;;
         *)
-            printf "用法: subconv {install|start|stop|restart|status|log|config|uninstall}\n"
+            printf "用法: subconv {install|start|stop|restart|status|log|config|tls|uninstall}\n"
             exit 1
             ;;
     esac

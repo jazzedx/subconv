@@ -58,6 +58,7 @@ subconv restart     # 重启
 subconv status      # 查看状态
 subconv log         # 查看日志
 subconv config      # 编辑配置文件
+subconv tls         # 配置 TLS 证书
 subconv uninstall   # 卸载
 ```
 
@@ -81,6 +82,8 @@ http://IP:8866/sub?token=xxx          # 带令牌
 http://IP:8866/sub?name=自定义名称     # 自定义配置名
 ```
 
+配置 TLS 后使用 `https://` 访问。
+
 Clash Verge 每次拉取都会触发上游同步刷新，确保节点最新。
 
 响应头包含 `Content-Disposition`（RFC 5987）、`Profile-Title`、`Profile-Update-Interval`、`Subscription-Userinfo`。
@@ -91,6 +94,8 @@ Clash Verge 每次拉取都会触发上游同步刷新，确保节点最新。
 
 ```yaml
 listen: ":8866"             # 监听地址
+# tls-cert: "/path/to/fullchain.pem"  # TLS 证书（留空则使用 HTTP）
+# tls-key: "/path/to/privkey.pem"     # TLS 私钥
 api-key: ""                 # 管理面板密钥（留空自动生成）
 sub-token: ""               # 订阅访问令牌（留空则不鉴权）
 config-name: "SubConv"      # Clash Verge 显示的配置名称

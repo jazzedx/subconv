@@ -19,6 +19,8 @@ type Subscription struct {
 
 type Config struct {
 	Listen         string         `yaml:"listen"          json:"listen"`
+	TLSCert        string         `yaml:"tls-cert"        json:"tls-cert"`
+	TLSKey         string         `yaml:"tls-key"         json:"tls-key"`
 	APIKey         string         `yaml:"api-key"         json:"api-key"`
 	SubToken       string         `yaml:"sub-token"       json:"sub-token"`
 	ConfigName     string         `yaml:"config-name"     json:"config-name"`
@@ -36,6 +38,10 @@ var (
 
 const defaultConfig = `# 监听地址
 listen: ":8866"
+
+# TLS 证书路径（留空则使用 HTTP）
+# tls-cert: "/path/to/fullchain.pem"
+# tls-key: "/path/to/privkey.pem"
 
 # Web管理面板API密钥（留空则自动生成）
 api-key: ""
@@ -108,7 +114,7 @@ func Load(path string) error {
 		slog.Warn("已自动生成API密钥，请查看配置文件", "path", path)
 		// 回写配置文件，使密钥持久化
 		Global = cfg
-		if err := Save(); err != nil {
+		if err := saveLocked(); err != nil {
 			slog.Error("回写配置文件失败", "err", err)
 		}
 		return nil
@@ -120,8 +126,12 @@ func Load(path string) error {
 
 func Save() error {
 	mu.Lock()
+	defer mu.Unlock()
+	return saveLocked()
+}
+
+func saveLocked() error {
 	data, err := yaml.Marshal(&Global)
-	mu.Unlock()
 	if err != nil {
 		return err
 	}
