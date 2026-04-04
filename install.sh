@@ -1,7 +1,7 @@
 #!/bin/sh
-# SubConv 一键安装脚本
-# 用法: curl -fsSL https://raw.githubusercontent.com/YOUR_USER/subconv/main/install.sh | bash
-# 加速: bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/YOUR_USER/subconv/main/install.sh) https://ghfast.top/
+# SubConv 管理脚本
+# 安装: curl -fsSL https://raw.githubusercontent.com/jazzedx/subconv/main/install.sh | bash
+# 加速: bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/jazzedx/subconv/main/install.sh) https://ghfast.top/
 
 set -e
 
@@ -11,12 +11,12 @@ INSTALL_DIR="/opt/subconv"
 BINARY_NAME="subconv"
 SERVICE_NAME="subconv"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+CONFIG_FILE="${INSTALL_DIR}/config.yaml"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
-GITHUB_PROXY="${1:-}"
+GITHUB_PROXY=""
 
 # ============ 运行状态 ============
 HAS_SYSTEMD=1
-IS_UPGRADE=0
 
 # ============ 颜色输出 ============
 RED='\033[0;31m'
@@ -46,14 +46,6 @@ check_os() {
 check_systemd() {
     if ! command -v systemctl >/dev/null 2>&1; then
         HAS_SYSTEMD=0
-        warn "未检测到 systemd，将跳过服务配置"
-    fi
-}
-
-check_existing() {
-    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
-        IS_UPGRADE=1
-        info "检测到已有安装，将执行升级操作"
     fi
 }
 
@@ -94,24 +86,49 @@ detect_arch() {
         aarch64|arm64)   ARCH="arm64" ;;
         *)               error "不支持的架构: $arch" ;;
     esac
-    ok "系统架构: $ARCH"
 }
 
-# ============ 获取最新版本 ============
-get_latest_version() {
+# ============ 状态检查 ============
+is_installed() {
+    [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]
+}
+
+is_running() {
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null
+    else
+        pgrep -x "$BINARY_NAME" >/dev/null 2>&1
+    fi
+}
+
+get_current_version() {
+    if is_installed; then
+        "${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null || echo "未知"
+    else
+        echo "未安装"
+    fi
+}
+
+# ============ 安装/升级 ============
+do_install() {
+    check_download_tool
+    detect_arch
+
+    IS_UPGRADE=0
+    if is_installed; then
+        IS_UPGRADE=1
+        info "检测到已有安装，将执行升级操作"
+    fi
+
     info "正在获取最新版本..."
     LATEST_VERSION=$(fetch_url "$GITHUB_API" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
     if [ -z "$LATEST_VERSION" ]; then
         error "无法获取最新版本号，请检查网络连接"
     fi
     ok "最新版本: $LATEST_VERSION"
-}
 
-# ============ 下载并安装 ============
-install_binary() {
     FILE_NAME="${BINARY_NAME}-linux-${ARCH}"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_VERSION}/${FILE_NAME}"
-
     if [ -n "$GITHUB_PROXY" ]; then
         DOWNLOAD_URL="${GITHUB_PROXY}${DOWNLOAD_URL}"
     fi
@@ -123,12 +140,10 @@ install_binary() {
     download "$DOWNLOAD_URL" "${TMP_DIR}/${BINARY_NAME}"
     ok "下载完成"
 
-    # 升级时停止正在运行的服务
-    if [ "$IS_UPGRADE" -eq 1 ] && [ "$HAS_SYSTEMD" -eq 1 ]; then
-        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-            warn "正在停止运行中的服务..."
-            systemctl stop "$SERVICE_NAME"
-        fi
+    # 升级时停止服务
+    if [ "$IS_UPGRADE" -eq 1 ] && is_running; then
+        warn "正在停止运行中的服务..."
+        do_stop
     fi
 
     mkdir -p "$INSTALL_DIR"
@@ -140,11 +155,34 @@ install_binary() {
     else
         ok "安装完成: ${INSTALL_DIR}/${BINARY_NAME}"
     fi
+
+    # 配置 systemd
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        setup_systemd
+        if [ "$IS_UPGRADE" -eq 0 ]; then
+            systemctl enable "$SERVICE_NAME" 2>/dev/null
+            ok "已设置开机自启动"
+        fi
+        do_start
+    fi
+
+    printf "\n"
+    printf "${GREEN}========================================${NC}\n"
+    if [ "$IS_UPGRADE" -eq 1 ]; then
+        printf "${GREEN}  SubConv 升级成功！${NC}\n"
+    else
+        printf "${GREEN}  SubConv 安装成功！${NC}\n"
+    fi
+    printf "${GREEN}========================================${NC}\n"
+    printf "  版本:     %s\n" "$LATEST_VERSION"
+    printf "  目录:     %s\n" "$INSTALL_DIR"
+    printf "  配置:     %s\n" "$CONFIG_FILE"
+    printf "  管理:     subconv {start|stop|restart|status|log|config|uninstall}\n"
+    printf "\n"
 }
 
 # ============ 配置 systemd ============
 setup_systemd() {
-    info "正在配置 systemd 服务..."
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=SubConv - 订阅转换服务
@@ -165,113 +203,253 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    ok "systemd 服务配置完成"
 }
 
-# ============ 交互选择 ============
-ask_enable() {
-    printf "${YELLOW}是否设置开机自启动？[Y/n]: ${NC}"
-    read -r answer < /dev/tty
-    case "$answer" in
-        [nN]|[nN][oO])
-            info "跳过开机自启动"
-            ;;
-        *)
-            systemctl enable "$SERVICE_NAME"
-            ok "已设置开机自启动"
-            ;;
-    esac
-}
-
-ask_start() {
-    printf "${YELLOW}是否立即启动服务？[Y/n]: ${NC}"
-    read -r answer < /dev/tty
-    case "$answer" in
-        [nN]|[nN][oO])
-            info "跳过启动"
-            ;;
-        *)
-            systemctl start "$SERVICE_NAME"
-            ok "服务已启动"
-            ;;
-    esac
-}
-
-# ============ 打印信息 ============
-print_info() {
-    printf "\n"
-    printf "${GREEN}========================================${NC}\n"
-    if [ "$IS_UPGRADE" -eq 1 ]; then
-        printf "${GREEN}  SubConv 升级成功！${NC}\n"
-    else
-        printf "${GREEN}  SubConv 安装成功！${NC}\n"
+# ============ 启动 ============
+do_start() {
+    if ! is_installed; then
+        error "SubConv 未安装"
     fi
-    printf "${GREEN}========================================${NC}\n"
+    if is_running; then
+        warn "SubConv 已在运行中"
+        return
+    fi
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        systemctl start "$SERVICE_NAME"
+    else
+        cd "$INSTALL_DIR"
+        nohup "./${BINARY_NAME}" > "${INSTALL_DIR}/subconv.log" 2>&1 &
+    fi
+    ok "SubConv 已启动"
+}
+
+# ============ 停止 ============
+do_stop() {
+    if ! is_running; then
+        warn "SubConv 未在运行"
+        return
+    fi
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        systemctl stop "$SERVICE_NAME"
+    else
+        pkill -x "$BINARY_NAME" 2>/dev/null || true
+    fi
+    ok "SubConv 已停止"
+}
+
+# ============ 重启 ============
+do_restart() {
+    do_stop
+    do_start
+}
+
+# ============ 状态 ============
+do_status() {
     printf "\n"
-    printf "  版本:       %s\n" "$LATEST_VERSION"
-    printf "  安装目录:   %s\n" "$INSTALL_DIR"
-    printf "  配置文件:   %s/config.yaml\n" "$INSTALL_DIR"
-    printf "\n"
+    if is_installed; then
+        printf "  安装状态: ${GREEN}已安装${NC}\n"
+        printf "  安装目录: %s\n" "$INSTALL_DIR"
+    else
+        printf "  安装状态: ${RED}未安装${NC}\n"
+        return
+    fi
+
+    if is_running; then
+        printf "  运行状态: ${GREEN}运行中${NC}\n"
+    else
+        printf "  运行状态: ${RED}已停止${NC}\n"
+    fi
 
     if [ "$HAS_SYSTEMD" -eq 1 ]; then
-        printf "  服务管理:\n"
-        printf "    启动:     systemctl start %s\n" "$SERVICE_NAME"
-        printf "    停止:     systemctl stop %s\n" "$SERVICE_NAME"
-        printf "    重启:     systemctl restart %s\n" "$SERVICE_NAME"
-        printf "    状态:     systemctl status %s\n" "$SERVICE_NAME"
-        printf "    日志:     journalctl -u %s -f\n" "$SERVICE_NAME"
-        printf "\n"
-        printf "  卸载:\n"
-        printf "    systemctl stop %s && systemctl disable %s\n" "$SERVICE_NAME" "$SERVICE_NAME"
-        printf "    rm -rf %s %s\n" "$INSTALL_DIR" "$SERVICE_FILE"
-        printf "    systemctl daemon-reload\n"
-    else
-        printf "${YELLOW}  未检测到 systemd，请手动运行：${NC}\n"
-        printf "    cd %s && ./%s\n" "$INSTALL_DIR" "$BINARY_NAME"
-        printf "\n"
-        printf "  后台运行:\n"
-        printf "    nohup %s/%s > %s/subconv.log 2>&1 &\n" "$INSTALL_DIR" "$BINARY_NAME" "$INSTALL_DIR"
-        printf "\n"
-        printf "  卸载:\n"
-        printf "    rm -rf %s\n" "$INSTALL_DIR"
+        if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+            printf "  开机自启: ${GREEN}已启用${NC}\n"
+        else
+            printf "  开机自启: ${YELLOW}未启用${NC}\n"
+        fi
     fi
     printf "\n"
 }
 
-# ============ 主流程 ============
-main() {
-    printf "\n"
-    printf "${GREEN}========================================${NC}\n"
-    printf "${GREEN}  SubConv 一键安装脚本${NC}\n"
-    printf "${GREEN}========================================${NC}\n"
-    printf "\n"
+# ============ 日志 ============
+do_log() {
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        journalctl -u "$SERVICE_NAME" -f --no-hostname -o cat
+    elif [ -f "${INSTALL_DIR}/subconv.log" ]; then
+        tail -f "${INSTALL_DIR}/subconv.log"
+    else
+        warn "没有可用的日志"
+    fi
+}
 
+# ============ 编辑配置 ============
+do_config() {
+    if ! is_installed; then
+        error "SubConv 未安装"
+    fi
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        warn "配置文件不存在，先启动一次服务以生成默认配置"
+        return
+    fi
+
+    # 选择编辑器
+    if command -v nano >/dev/null 2>&1; then
+        EDITOR_CMD="nano"
+    elif command -v vi >/dev/null 2>&1; then
+        EDITOR_CMD="vi"
+    elif command -v vim >/dev/null 2>&1; then
+        EDITOR_CMD="vim"
+    else
+        error "未找到可用的编辑器 (nano/vi/vim)"
+    fi
+
+    info "使用 ${EDITOR_CMD} 编辑配置文件..."
+    $EDITOR_CMD "$CONFIG_FILE" < /dev/tty
+
+    if is_running; then
+        printf "${YELLOW}配置已修改，是否重启服务使其生效？[Y/n]: ${NC}"
+        read -r answer < /dev/tty
+        case "$answer" in
+            [nN]|[nN][oO]) info "跳过重启，修改将在下次启动时生效" ;;
+            *) do_restart ;;
+        esac
+    else
+        ok "配置已保存，启动服务后生效"
+    fi
+}
+
+# ============ 卸载 ============
+do_uninstall() {
+    if ! is_installed; then
+        error "SubConv 未安装"
+    fi
+
+    printf "${RED}确认要卸载 SubConv 吗？[y/N]: ${NC}"
+    read -r answer < /dev/tty
+    case "$answer" in
+        [yY]|[yY][eE][sS]) ;;
+        *) info "取消卸载"; return ;;
+    esac
+
+    # 停止服务
+    if is_running; then
+        do_stop
+    fi
+
+    # 移除 systemd
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+        rm -f "$SERVICE_FILE"
+        systemctl daemon-reload
+    fi
+
+    # 询问是否保留配置
+    if [ -f "$CONFIG_FILE" ]; then
+        printf "${YELLOW}是否保留配置文件 ${CONFIG_FILE}？[Y/n]: ${NC}"
+        read -r answer < /dev/tty
+        case "$answer" in
+            [nN]|[nN][oO])
+                rm -rf "$INSTALL_DIR"
+                ok "已删除全部文件"
+                ;;
+            *)
+                BACKUP="/tmp/subconv-config-backup.yaml"
+                cp "$CONFIG_FILE" "$BACKUP"
+                rm -rf "$INSTALL_DIR"
+                ok "已删除程序文件，配置已备份到 $BACKUP"
+                ;;
+        esac
+    else
+        rm -rf "$INSTALL_DIR"
+        ok "已删除全部文件"
+    fi
+
+    # 移除管理命令
+    rm -f /usr/local/bin/subconv
+
+    ok "SubConv 已卸载"
+}
+
+# ============ 安装管理命令 ============
+install_command() {
+    cat > /usr/local/bin/subconv <<'SCRIPT'
+#!/bin/sh
+exec /opt/subconv/install.sh "$@"
+SCRIPT
+    chmod +x /usr/local/bin/subconv
+}
+
+# ============ 菜单 ============
+show_menu() {
+    printf "\n"
+    printf "${GREEN}========================================${NC}\n"
+    printf "${GREEN}       SubConv 管理脚本${NC}\n"
+    printf "${GREEN}========================================${NC}\n"
+    printf "\n"
+    printf "  ${GREEN}1.${NC} 安装 / 升级\n"
+    printf "  ${GREEN}2.${NC} 启动\n"
+    printf "  ${GREEN}3.${NC} 停止\n"
+    printf "  ${GREEN}4.${NC} 重启\n"
+    printf "  ${GREEN}5.${NC} 查看状态\n"
+    printf "  ${GREEN}6.${NC} 查看日志\n"
+    printf "  ${GREEN}7.${NC} 编辑配置\n"
+    printf "  ${GREEN}8.${NC} 卸载\n"
+    printf "  ${GREEN}0.${NC} 退出\n"
+    printf "\n"
+    printf "请选择操作 [0-8]: "
+    read -r choice < /dev/tty
+    case "$choice" in
+        1) do_install ;;
+        2) do_start ;;
+        3) do_stop ;;
+        4) do_restart ;;
+        5) do_status ;;
+        6) do_log ;;
+        7) do_config ;;
+        8) do_uninstall ;;
+        0) exit 0 ;;
+        *) warn "无效选项" ;;
+    esac
+}
+
+# ============ 主入口 ============
+main() {
     check_root
     check_os
     check_systemd
-    check_existing
-    check_download_tool
-    detect_arch
-    get_latest_version
-    install_binary
 
-    if [ "$HAS_SYSTEMD" -eq 1 ]; then
-        setup_systemd
-        ask_enable
+    # 处理 GitHub 代理参数（仅对纯 URL 参数生效）
+    case "${1:-}" in
+        http://*|https://*) GITHUB_PROXY="$1"; shift ;;
+    esac
 
-        if [ "$IS_UPGRADE" -eq 1 ]; then
-            printf "${YELLOW}是否重新启动服务？[Y/n]: ${NC}"
-            read -r answer < /dev/tty
-            case "$answer" in
-                [nN]|[nN][oO]) info "跳过启动" ;;
-                *) systemctl restart "$SERVICE_NAME"; ok "服务已重新启动" ;;
-            esac
-        else
-            ask_start
-        fi
-    fi
-
-    print_info
+    # 命令行参数模式
+    case "${1:-}" in
+        install|upgrade)  do_install ;;
+        start)            do_start ;;
+        stop)             do_stop ;;
+        restart)          do_restart ;;
+        status)           do_status ;;
+        log|logs)         do_log ;;
+        config)           do_config ;;
+        uninstall|remove) do_uninstall ;;
+        "")
+            # 无参数：首次安装直接安装，否则显示菜单
+            if ! is_installed; then
+                do_install
+                # 安装后复制脚本到本地 + 创建管理命令
+                cp "$0" "${INSTALL_DIR}/install.sh" 2>/dev/null || true
+                chmod +x "${INSTALL_DIR}/install.sh" 2>/dev/null || true
+                install_command
+            else
+                show_menu
+            fi
+            ;;
+        *)
+            printf "用法: subconv {install|start|stop|restart|status|log|config|uninstall}\n"
+            exit 1
+            ;;
+    esac
 }
 
-main
+main "$@"

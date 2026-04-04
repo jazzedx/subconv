@@ -49,15 +49,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/jazzedx/subconv/main/install
 bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/jazzedx/subconv/main/install.sh) https://ghfast.top/
 ```
 
-安装后通过 systemd 管理：
+安装后使用 `subconv` 命令管理：
 
 ```bash
-systemctl start subconv     # 启动
-systemctl stop subconv      # 停止
-systemctl restart subconv   # 重启
-systemctl status subconv    # 状态
-journalctl -u subconv -f    # 日志
+subconv start       # 启动
+subconv stop        # 停止
+subconv restart     # 重启
+subconv status      # 查看状态
+subconv log         # 查看日志
+subconv config      # 编辑配置文件
+subconv uninstall   # 卸载
 ```
+
+也可以直接运行脚本打开交互式菜单，或使用 systemd 命令管理。
 
 ### Docker
 
