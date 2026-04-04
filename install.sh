@@ -239,8 +239,17 @@ do_stop() {
 
 # ============ 重启 ============
 do_restart() {
-    do_stop
-    do_start
+    if ! is_installed; then
+        error "SubConv 未安装"
+    fi
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        systemctl restart "$SERVICE_NAME"
+    else
+        do_stop
+        do_start
+        return
+    fi
+    ok "SubConv 已重启"
 }
 
 # ============ 状态 ============
@@ -293,14 +302,14 @@ do_config() {
     fi
 
     # 选择编辑器
-    if command -v nano >/dev/null 2>&1; then
-        EDITOR_CMD="nano"
+    if command -v vim >/dev/null 2>&1; then
+        EDITOR_CMD="vim"
     elif command -v vi >/dev/null 2>&1; then
         EDITOR_CMD="vi"
-    elif command -v vim >/dev/null 2>&1; then
-        EDITOR_CMD="vim"
+    elif command -v nano >/dev/null 2>&1; then
+        EDITOR_CMD="nano"
     else
-        error "未找到可用的编辑器 (nano/vi/vim)"
+        error "未找到可用的编辑器 (vim/vi/nano)"
     fi
 
     info "使用 ${EDITOR_CMD} 编辑配置文件..."
@@ -370,13 +379,22 @@ do_uninstall() {
     ok "SubConv 已卸载"
 }
 
-# ============ 安装管理命令 ============
-install_command() {
+# ============ 安装管理脚本到本地 ============
+install_management_script() {
+    SCRIPT_URL="https://raw.githubusercontent.com/${REPO}/main/install.sh"
+    if [ -n "$GITHUB_PROXY" ]; then
+        SCRIPT_URL="${GITHUB_PROXY}${SCRIPT_URL}"
+    fi
+    info "正在下载管理脚本..."
+    download "$SCRIPT_URL" "${INSTALL_DIR}/install.sh"
+    chmod +x "${INSTALL_DIR}/install.sh"
+
     cat > /usr/local/bin/subconv <<'SCRIPT'
 #!/bin/sh
 exec /opt/subconv/install.sh "$@"
 SCRIPT
     chmod +x /usr/local/bin/subconv
+    ok "管理命令已安装: subconv {start|stop|restart|status|log|config|uninstall}"
 }
 
 # ============ 菜单 ============
@@ -425,7 +443,7 @@ main() {
 
     # 命令行参数模式
     case "${1:-}" in
-        install|upgrade)  do_install ;;
+        install|upgrade)  do_install; install_management_script ;;
         start)            do_start ;;
         stop)             do_stop ;;
         restart)          do_restart ;;
@@ -437,10 +455,7 @@ main() {
             # 无参数：首次安装直接安装，否则显示菜单
             if ! is_installed; then
                 do_install
-                # 安装后复制脚本到本地 + 创建管理命令
-                cp "$0" "${INSTALL_DIR}/install.sh" 2>/dev/null || true
-                chmod +x "${INSTALL_DIR}/install.sh" 2>/dev/null || true
-                install_command
+                install_management_script
             else
                 show_menu
             fi

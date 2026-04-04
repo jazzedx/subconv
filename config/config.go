@@ -106,6 +106,12 @@ func Load(path string) error {
 	if cfg.APIKey == "" {
 		cfg.APIKey = generateKey(16)
 		slog.Warn("已自动生成API密钥，请查看配置文件", "path", path)
+		// 回写配置文件，使密钥持久化
+		Global = cfg
+		if err := Save(); err != nil {
+			slog.Error("回写配置文件失败", "err", err)
+		}
+		return nil
 	}
 
 	Global = cfg
