@@ -317,6 +317,9 @@ func buildRuleProviders() map[string]any {
 
 func buildRules() []string {
 	return []string{
+		// 拦截 QUIC，强制降级为 TCP 以支持域名匹配
+		"AND,((NETWORK,UDP),(DST-PORT,443)),REJECT",
+
 		// 直连应用
 		"RULE-SET,applications,DIRECT",
 		"RULE-SET,private,DIRECT",
